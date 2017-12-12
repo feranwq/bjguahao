@@ -3,6 +3,7 @@ import logging
 import re
 import sys
 import time
+import random
 import unicodedata
 
 import requests
@@ -129,6 +130,25 @@ class Registration:
         self.start_time = time.mktime(c_time) - int(appoint_day) * 24 * 3600
         logging.info('放号时间为: ' + time.strftime('%Y-%m-%d %H:%M', time.localtime(self.start_time)))
         return
+
+    def query_remaining_nums(self):
+        url = self.appoint_url.format(self.hospital_id, self.department_id)
+        res = self.request('get', url)
+        data = res.text
+        re_nums = re.findall(r'.*?预约<br>剩余.(\d+).*?value="\d_(\d)_(\d+-\d+-\d+)"', data)
+        duty_nums = {}
+        if len(re_nums) == 0:
+            # logging.info('呀!都约满了,重试')
+            return False
+        else:
+            count = 0
+            for duty_num in re_nums:
+                duty_nums.update({count: {'date': duty_num[2], 'noon': duty_num[1]}})
+                logging.info('有号了!   日期是:', duty_num[2], '  剩余号源:', duty_num[0], '   预诊时段为:', '上午' if duty_num[1] == '1' else '下午', '序号:', count)
+                count += 1
+            self.duty_date = duty_nums[0]['date']
+            self.dutyCode = duty_nums[0]['noon']
+        return True
 
     def auth_login(self):
         """
@@ -287,26 +307,28 @@ class Registration:
             seconds = int(self.start_time - now - 30)
             logging.info(str(seconds) + '秒后开始运行')
             time.sleep(seconds)
-        if self.auth_login():
-            if self.get_sms_verify_code():
-                sms_code = input('请输入短信验证码: ')
-                while True:
-                    if self.choose_doctor():
-                        if self.get_patient_id():
-                            # if self.get_sms_verify_code():
-                            # sms_code = input('请输入短信验证码: ')
-                            res = self.get_register(sms_code)
-                            if res:
-                                break
-                        time.sleep(1)
-                    else:
-                        if self.doctor == {}:
-                            logging.info('等待放号中')
+        while True:
+            if self.query_remaining_nums():
+                if self.auth_login():
+                        if self.choose_doctor():
+                            if self.get_patient_id():
+                                if self.get_sms_verify_code():
+                                    sms_code = input('请输入短信验证码: ')
+                                    res = self.get_register(sms_code)
+                                    if res:
+                                        break
                             time.sleep(1)
                         else:
-                            logging.info('号已抢完')
-                            break
-        return
+                            if self.doctor == {}:
+                                logging.info('等待放号中')
+                                time.sleep(1)
+                            else:
+                                logging.info('号已抢完')
+                                break
+                return
+            else:
+                logging.debug('无号,休息一下再试')
+                time.sleep(random.randint(1,7))
 
 
 if __name__ == '__main__':
